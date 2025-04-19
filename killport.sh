@@ -25,7 +25,8 @@ kill_port_processes() {
   pids=$(lsof -iTCP:"$port" -sTCP:LISTEN -P -n 2>/dev/null \
          | awk 'NR>1 {print $2}' \
          | grep -E '^[0-9]+$' \
-         | sort -u)
+         | sort -u \
+         | tr '\n' ' ')
 
   if [ -z "$pids" ]; then
     echo -e "${YELLOW}ℹ️  No process is listening on port ${BLUE}$port${NC}"
@@ -34,6 +35,12 @@ kill_port_processes() {
 
   echo -e "${BLUE}🔪 Killing processes on port ${port}:${NC}"
   for pid in $pids; do
+    # Ensure PID is valid
+    if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+      echo -e "  ${YELLOW}⚠️  Invalid PID format: ${pid}, skipped${NC}"
+      continue
+    fi
+    
     # Skip if already gone
     if ! kill -0 "$pid" 2>/dev/null; then
       echo -e "  ${YELLOW}⚠️  PID ${pid} no longer exists, skipped${NC}"
@@ -43,7 +50,14 @@ kill_port_processes() {
     # Get command name and owner
     local cmd owner me kill_cmd note
     cmd=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
-    owner=$(ps -p "$pid" -o user= 2>/dev/null | awk '{print $1}')
+    
+    # Get owner, handle potential errors
+    owner=$(ps -p "$pid" -o user= 2>/dev/null | awk '{print $1}' 2>/dev/null || echo "unknown")
+    if [ "$owner" = "unknown" ]; then
+      echo -e "  ${YELLOW}⚠️  Could not determine owner of PID ${pid}, assuming not owned by you${NC}"
+      owner=""
+    fi
+    
     me=$(id -un)
 
     # Decide whether to prepend sudo
@@ -57,10 +71,22 @@ kill_port_processes() {
 
     # Report and execute
     echo -e "  • ${YELLOW}Killing PID ${pid}${NC} (${cmd}) ${note}"
-    if $kill_cmd >/dev/null 2>&1; then
-      echo -e "    ${GREEN}✅ PID ${pid} killed successfully${NC}"
+    
+    # Execute the kill command but with proper error handling
+    if [ "$kill_cmd" = "sudo kill -9 $pid" ]; then
+      # Using sudo requires special handling
+      if sudo kill -9 "$pid" >/dev/null 2>&1; then
+        echo -e "    ${GREEN}✅ PID ${pid} killed successfully${NC}"
+      else
+        echo -e "    ${RED}❌ Failed to kill PID ${pid} with sudo${NC}"
+      fi
     else
-      echo -e "    ${RED}❌ Failed to kill PID ${pid} with '${kill_cmd}'${NC}"
+      # Standard kill without sudo
+      if kill -9 "$pid" >/dev/null 2>&1; then
+        echo -e "    ${GREEN}✅ PID ${pid} killed successfully${NC}"
+      else
+        echo -e "    ${RED}❌ Failed to kill PID ${pid}${NC}"
+      fi
     fi
   done
 }
